@@ -1,28 +1,13 @@
-import random
-import numpy as np
-import pandas as pd
-import os
-import re
-from tensorflow.keras.preprocessing.image import load_img, img_to_array, ImageDataGenerator
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv3D, MaxPooling3D, Flatten, Dense, Dropout, LeakyReLU
-from tensorflow.keras.metrics import AUC, Precision, Recall, F1Score
-import tensorflow.keras.backend as K
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.optimizers import Adam
-#from google.colab import drive
-#drive.mount('/content/drive', force_remount=True)
 
-batch_size = 16 # change this
+#Feel free to change these to test different model configurations
+batch_size = 16 
 target_size = (256,256)
-
-numFrames = 10 #change this
+numFrames = 10 
 
 """# Initialization"""
 
 # Load the spreadsheet
-#spreadsheet_path = '/content/drive/MyDrive/Final Dataset.xlsx'
-spreadsheet_path = '/home/crsilver/scratch/TF66/Final Dataset.xlsx'
+spreadsheet_path = '/home/crsilver/scratch/TF66/Final Dataset.xlsx' #spreadsheet path for training - compute canada
 spreadsheet = pd.read_excel(spreadsheet_path)
 
 
@@ -37,7 +22,7 @@ for i, row in spreadsheet.iterrows():
     }
 
 train_cache_file = '/home/crsilver/scratch/train_cache.npz'
-val_cache_file = '/home/crsilver/scratch/val_cache.npz'
+val_cache_file = '/home/crsilver/scratch/val_cache.npz' # YOU NEED TO CREATE YOUR OWN CACHE FILE FOR THIS TO WORK - LOOK AT THE TF-66 GITHUB REPO FOR INSTRUCTIONS
 def load_cached_images(cache_file):
     return np.load(cache_file, allow_pickle=True)
 
@@ -49,6 +34,7 @@ val_cache = load_cached_images(val_cache_file)
 train_filepaths = list(train_cache.keys())
 val_filepaths = list(val_cache.keys())
 
+
 def sort_frames_numerically(filenames):
     # This function extracts the number from the filename and sorts by the number
     def extract_number(f):
@@ -59,6 +45,7 @@ def sort_frames_numerically(filenames):
     
     
 # Predefined arrays
+all_data_array = ['01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48','49','50','51','52','53','54','55','56','57','58','59','60','61','62','63','64','65','66']
 eight_feet_array = ['01','02','03','04','05','06','07','08','09','10','11','12','13','14','45','46','47','48','49','50','51','52','53','54','55','56','57','58','59','60','61','62','63','64','65','66']
 nine_feet_array = ['15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37']
 ten_feet_array = ['38','39','40','41','42','43','44']
@@ -69,10 +56,11 @@ covered_arms_array = ['01','04','05','07','09','10','11','12','13','14','15','16
 inconsistent_arms_array = ['41','45','46','49','50','54','59','60','61','66']
 
 # Toggles
+all_data = True
 eight_feet = False
 nine_feet = False
 ten_feet = False
-senior = True
+senior = False
 hospital = False
 exposed_arms = False
 covered_arms = False
@@ -80,7 +68,7 @@ inconsistent_arms = False
  
 
 
-class DataGenerator:
+class CachedNumpyDataGenerator:
     def __init__(self, cache, filepaths, batch_size, num_frames=10, target_size=(256, 256)):
         self.cache = cache
         self.filepaths = filepaths
@@ -89,6 +77,8 @@ class DataGenerator:
         self.target_size = target_size
 
         self.active_values = []
+        if all_data:
+            self.active_values.extend(all_data_array)
         if eight_feet:
             self.active_values.extend(eight_feet_array)
         if nine_feet:
@@ -112,26 +102,16 @@ class DataGenerator:
     def __next__(self):
         X_batch = []
         y_batch = []
-        paths_batch = []
 
         while len(X_batch) < self.batch_size:
             random_file_path = random.choice(self.filepaths)
             path_parts = random_file_path.split(os.sep)
             category_folder = path_parts[-3]
             video_name = path_parts[-2]
-            #print("Category folder is " + category_folder)
-            #print("Video name is " + video_name)
 
             # Extract the first two characters of the video name
             video_name_key = video_name.replace('.avi', '')
             first_two_chars = video_name_key[:2]
-
-            # Check if the first two characters match any value in the active_values list
-            if first_two_chars not in self.active_values:
-                print("first_two_chars NOT IN active values. first_two_chars is " + str(first_two_chars))
-                continue
-            else:
-                print("first_two_chars IN active values. first_two_chars is " + str(first_two_chars))
 
             if video_name_key not in video_info:
                 continue
@@ -158,6 +138,7 @@ class DataGenerator:
 
                 start_min = max(0, firstFallFrameOfVideo - self.num_frames)
                 start_max = min(firstFallFrameOfVideo - (self.num_frames // 2), totalFrames - self.num_frames)
+
                 if start_min > start_max:
                     raise ValueError("Invalid constraints: No valid starting frame can be found.")
 
@@ -174,15 +155,11 @@ class DataGenerator:
 
         X_batch = np.array(X_batch)
         y_batch = np.array(y_batch).astype('float32')
-        return X_batch, y_batch#, paths_batch
+        return X_batch, y_batch
 
 
-
-
-
-train_generator = DataGenerator(train_cache, train_filepaths, batch_size=batch_size)
-validation_generator = DataGenerator(val_cache, val_filepaths, batch_size=batch_size)
-
+train_generator = CachedNumpyDataGenerator(train_cache, train_filepaths, batch_size=batch_size)
+validation_generator = CachedNumpyDataGenerator(val_cache, val_filepaths, batch_size=batch_size)
 
 
 import tensorflow as tf
@@ -190,8 +167,7 @@ train_dataset = tf.data.Dataset.from_generator(
     lambda: train_generator,
     output_signature=(
         tf.TensorSpec(shape=(None, numFrames, 256, 256, 1), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.float32),
-        #tf.TensorSpec(shape=(None, numFrames), dtype=tf.string)
+        tf.TensorSpec(shape=(None,), dtype=tf.float32)
     )
 ).prefetch(tf.data.experimental.AUTOTUNE)
 
@@ -199,8 +175,6 @@ validation_dataset = tf.data.Dataset.from_generator(
     lambda: validation_generator,
     output_signature=(
         tf.TensorSpec(shape=(None, numFrames, 256, 256, 1), dtype=tf.float32),
-        tf.TensorSpec(shape=(None,), dtype=tf.float32),
-        #tf.TensorSpec(shape=(None, numFrames), dtype=tf.string)
+        tf.TensorSpec(shape=(None,), dtype=tf.float32)
     )
 ).prefetch(tf.data.experimental.AUTOTUNE)
-
